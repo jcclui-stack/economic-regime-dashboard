@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write          # ← This line gives permission to push
+  contents: write
 
 jobs:
   build_dashboard:
@@ -34,6 +34,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dashboard/
+          git add docs/
           git commit -m "Weekly dashboard update - $(date +'%Y-%m-%d')" || echo "No changes to commit"
           git push
