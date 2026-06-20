@@ -2,8 +2,11 @@ name: Weekly Economic Dashboard Update
 
 on:
   schedule:
-    - cron: '0 10 * * 1'   # Runs every Monday at 10:00 UTC
+    - cron: '0 10 * * 1'   # Every Monday at 10:00 UTC
   workflow_dispatch:
+
+permissions:
+  contents: write          # ← This line gives permission to push
 
 jobs:
   build_dashboard:
@@ -11,7 +14,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5          # ← Updated from v4 to v5
+        uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,5 +35,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add dashboard/
-          git commit -m "Weekly dashboard update - $(date +'%Y-%m-%d')" || echo "No changes"
+          git commit -m "Weekly dashboard update - $(date +'%Y-%m-%d')" || echo "No changes to commit"
           git push
