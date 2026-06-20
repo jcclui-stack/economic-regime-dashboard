@@ -3,7 +3,7 @@ name: Weekly Economic Dashboard Update
 on:
   schedule:
     - cron: '0 10 * * 1'   # Runs every Monday at 10:00 UTC
-  workflow_dispatch:       # Allows manual run from GitHub
+  workflow_dispatch:
 
 jobs:
   build_dashboard:
@@ -11,7 +11,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5          # ← Updated from v4 to v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
