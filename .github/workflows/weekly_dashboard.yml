@@ -1,1 +1,36 @@
+name: Weekly Economic Dashboard Update
 
+on:
+  schedule:
+    - cron: '0 10 * * 1'   # Runs every Monday at 10:00 UTC
+  workflow_dispatch:       # Allows manual run from GitHub
+
+jobs:
+  build_dashboard:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Economic Dashboard
+        run: |
+          python src/economic_dashboard.py
+
+      - name: Commit and push updated dashboard
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dashboard/
+          git commit -m "Weekly dashboard update - $(date +'%Y-%m-%d')" || echo "No changes"
+          git push
