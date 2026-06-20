@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 
 print("=== Starting Economic Dashboard ===")
-os.makedirs("dashboard", exist_ok=True)
+os.makedirs("docs", exist_ok=True)
 
 # ====================== LOAD DATA ======================
 macro = pd.read_csv("data/macro_data.csv", parse_dates=["date"], index_col="date")
@@ -19,28 +19,25 @@ corp = pd.read_csv("data/bellwether_corporate_index.csv", parse_dates=["date"], 
 df = macro.join(corp, how="outer", lsuffix="_macro", rsuffix="_corp").dropna()
 print(f"Data loaded successfully. Shape: {df.shape}")
 
-# Create Bellwether Corporate Index using the corp version of duplicated columns
+# Create Bellwether Corporate Index
 df["Bellwether_Index"] = df[[
     "WMT_Inv_Growth", "PG_Inv_Growth", "AAPL_Inv_Growth",
     "JPM_Inv_Growth", "CAT_Inv_Growth", "FDX_Inv_Growth",
     "TSLA_Inv_Days", "SPX_Guidance_Revision_corp", "Duke_CFO_Capex_corp"
 ]].mean(axis=1)
 
-# Define predictors (using _corp suffix for duplicated columns)
 predictors = [
     "ISM_New_Orders", "Philly_Capex", "UMich_Sentiment",
     "Bellwether_Index", "Duke_CFO_Capex_corp", "SPX_Guidance_Revision_corp"
 ]
 
-# Standardize
 df[predictors] = (df[predictors] - df[predictors].mean()) / df[predictors].std()
 
-# Create lagged variables
 for var in predictors + ["GDP_Growth"]:
     df[f"{var}_lag1"] = df[var].shift(1)
 
 df = df.dropna()
-print(f"Data after lagging. Final shape: {df.shape}")
+print(f"Final data shape: {df.shape}")
 
 # ====================== REGIME-SWITCHING MODEL ======================
 print("Fitting Markov Switching Model...")
@@ -56,7 +53,7 @@ df["Regime_Prob_Recession"] = ms_results.smoothed_marginal_probabilities[1]
 df["Regime_Prob_Recession_lag1"] = df["Regime_Prob_Recession"].shift(1)
 df = df.dropna()
 
-# ====================== LOGISTIC RECESSION MODEL ======================
+# ====================== LOGISTIC MODEL ======================
 print("Fitting Logistic Regression...")
 logit_exog = sm.add_constant(df[[f"{v}_lag1" for v in predictors] + ["Regime_Prob_Recession_lag1"]])
 logit_model = Logit(df["Recession_Next4Q"], logit_exog)
@@ -67,9 +64,9 @@ df["Recession_Prob"] = logit_results.predict()
 latest = df.iloc[-1]
 latest_date = df.index[-1]
 
-print(f"Latest date in data: {latest_date}")
+print(f"Latest date: {latest_date}")
 
-# Create visualization
+# Create plots
 fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
 df[["Regime_Prob_Expansion", "Regime_Prob_Recession"]].plot(ax=axes[0, 0], title="Regime Probabilities")
@@ -87,10 +84,10 @@ sns.heatmap(latest_vals.to_frame().T, annot=True, cmap="RdYlGn", center=0,
 axes[1, 1].set_title("Latest Standardized Indicators")
 
 plt.tight_layout()
-plt.savefig("dashboard/latest_dashboard.png", dpi=150, bbox_inches="tight")
+plt.savefig("docs/latest_dashboard.png", dpi=150, bbox_inches="tight")
 plt.close()
 
-# Generate HTML page
+# Generate HTML
 html_content = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -104,7 +101,7 @@ html_content = f"""<!DOCTYPE html>
     <p>Expansion: <strong>{latest['Regime_Prob_Expansion']*100:.1f}%</strong></p>
     <p>Recession: <strong>{latest['Regime_Prob_Recession']*100:.1f}%</strong></p>
     
-    <h2>4-Quarter Ahead Recession Probability</h2>
+    <h2>4-Quarter Recession Probability</h2>
     <p style="font-size: 28px; color: red; font-weight: bold;">
         {latest['Recession_Prob']*100:.1f}%
     </p>
@@ -114,8 +111,7 @@ html_content = f"""<!DOCTYPE html>
 </body>
 </html>"""
 
-with open("dashboard/index.html", "w", encoding="utf-8") as f:
+with open("docs/index.html", "w", encoding="utf-8") as f:
     f.write(html_content)
 
 print("✅ Dashboard generated successfully!")
-print("Files saved in /dashboard folder")
