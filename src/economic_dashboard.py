@@ -66,27 +66,52 @@ latest_date = df.index[-1]
 
 print(f"Latest date: {latest_date}")
 
-# Create plots
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+# Filter data from 2019 onwards for cleaner charts
+df_plot = df[df.index >= '2019-01-01']
 
-df[["Regime_Prob_Expansion", "Regime_Prob_Recession"]].plot(ax=axes[0, 0], title="Regime Probabilities")
-axes[0, 0].axhline(0.5, color="gray", linestyle="--")
+# Create visualization
+fig, axes = plt.subplots(2, 2, figsize=(15, 10))
 
-df["Recession_Prob"].plot(ax=axes[0, 1], title="4-Quarter Recession Probability", color="red")
+# 1. Regime Probabilities
+df_plot[["Regime_Prob_Expansion", "Regime_Prob_Recession"]].plot(
+    ax=axes[0, 0], 
+    title="Regime Probabilities (2019–2026)",
+    linewidth=2
+)
+axes[0, 0].axhline(0.5, color="gray", linestyle="--", alpha=0.7)
+axes[0, 0].fill_between(df_plot.index, 0, 1, 
+                        where=(df_plot["Regime_Prob_Recession"] > 0.5), 
+                        color="red", alpha=0.15, label="Recession Regime Dominant")
+axes[0, 0].legend()
 
-df["Bellwether_Index"].plot(ax=axes[1, 0], label="Bellwether Index", color="blue")
-df["GDP_Growth"].plot(ax=axes[1, 0].twinx(), label="GDP Growth", color="green", alpha=0.6)
-axes[1, 0].set_title("Bellwether Index vs GDP Growth")
+# 2. 4-Quarter Recession Probability
+df_plot["Recession_Prob"].plot(
+    ax=axes[0, 1], 
+    title="4-Quarter Recession Probability (2019–2026)", 
+    color="red",
+    linewidth=2
+)
+axes[0, 1].axhline(0.3, color="orange", linestyle="--", label="Warning Threshold (30%)")
+axes[0, 1].axhline(0.5, color="darkred", linestyle="--", label="High Risk (50%)")
+axes[0, 1].legend()
+axes[0, 1].set_ylim(0, 1)
 
+# 3. Bellwether Index vs GDP Growth
+ax3 = axes[1, 0]
+df_plot["Bellwether_Index"].plot(ax=ax3, label="Bellwether Index", color="blue", linewidth=2)
+df_plot["GDP_Growth"].plot(ax=ax3.twinx(), label="GDP Growth (%)", color="green", alpha=0.7, linewidth=2)
+ax3.set_title("Bellwether Corporate Index vs GDP Growth (2019–2026)")
+ax3.legend(loc="upper left")
+
+# 4. Latest Indicators Heatmap (still uses latest values)
 latest_vals = df.loc[latest_date, [f"{v}_lag1" for v in predictors]]
-sns.heatmap(latest_vals.to_frame().T, annot=True, cmap="RdYlGn", center=0,
-            ax=axes[1, 1], cbar=False)
-axes[1, 1].set_title("Latest Standardized Indicators")
+sns.heatmap(latest_vals.to_frame().T, annot=True, cmap="RdYlGn", center=0, 
+            ax=axes[1, 1], cbar=True, fmt=".2f")
+axes[1, 1].set_title("Latest Standardized Indicators (Lagged)")
 
 plt.tight_layout()
 plt.savefig("docs/latest_dashboard.png", dpi=150, bbox_inches="tight")
 plt.close()
-
 # Generate HTML
 html_content = f"""<!DOCTYPE html>
 <html>
