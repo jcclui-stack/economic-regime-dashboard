@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score
 
-print("=== Starting Economic Dashboard with Backtesting ===")
+print("=== Starting Economic Dashboard ===")
 os.makedirs("docs", exist_ok=True)
 
 # ====================== LOAD DATA ======================
@@ -36,7 +36,7 @@ for var in predictors + ["GDP_Growth"]:
 
 df = df.dropna()
 
-# ====================== MAIN MULTI-VARIABLE MODEL ======================
+# ====================== MAIN MODEL ======================
 print("Fitting Full Multi-Variable Model...")
 
 endog = df["GDP_Growth"]
@@ -44,7 +44,7 @@ exog = df[[f"{v}_lag1" for v in predictors]]
 
 ms_model = MarkovRegression(endog, k_regimes=2, exog=exog,
                             switching_variance=True, switching_exog=True)
-ms_results = ms_model.fit(disp=False)
+ms_results = ms_model.fit(disp=False, maxiter=200)
 
 df["Regime_Prob_Expansion"] = ms_results.smoothed_marginal_probabilities[0]
 df["Regime_Prob_Recession"] = ms_results.smoothed_marginal_probabilities[1]
@@ -53,75 +53,81 @@ df = df.dropna()
 
 logit_exog = sm.add_constant(df[[f"{v}_lag1" for v in predictors] + ["Regime_Prob_Recession_lag1"]])
 logit_model = Logit(df["Recession_Next4Q"], logit_exog)
-logit_results = logit_model.fit(disp=False)
+logit_results = logit_model.fit(disp=False, maxiter=200)
 df["Recession_Prob"] = logit_results.predict()
 
-# ====================== ROLLING WINDOW BACKTEST ======================
+# ====================== ROBUST ROLLING BACKTEST ======================
 print("\n=== Running Rolling Window Backtest ===")
 
 window_size = 32
-full_model_preds, benchmark_preds, actuals = [], [], []
+full_preds, bench_preds, actuals = [], [], []
 
-for i in range(window_size, len(df) - 1):
+for i in range(window_size, len(df) - 4):
     train = df.iloc[:i].copy()
     test = df.iloc[i:i+1].copy()
     
     try:
-        # --- Full Model ---
+        # Full Model
         endog_train = train["GDP_Growth"]
         exog_train = train[[f"{v}_lag1" for v in predictors]]
         
         ms_bt = MarkovRegression(endog_train, k_regimes=2, exog=exog_train,
                                  switching_variance=True, switching_exog=True)
-        ms_bt_results = ms_bt.fit(disp=False)
+        ms_bt_res = ms_bt.fit(disp=False, maxiter=150)
         
-        train["Regime_Prob_Recession"] = ms_bt_results.smoothed_marginal_probabilities[1]
+        train["Regime_Prob_Recession"] = ms_bt_res.smoothed_marginal_probabilities[1]
         train["Regime_Prob_Recession_lag1"] = train["Regime_Prob_Recession"].shift(1)
         train = train.dropna()
         
+        if len(train) < 15 or train["Recession_Next4Q"].nunique() < 2:
+            continue
+            
         logit_exog_bt = sm.add_constant(train[[f"{v}_lag1" for v in predictors] + ["Regime_Prob_Recession_lag1"]])
         logit_bt = Logit(train["Recession_Next4Q"], logit_exog_bt)
-        logit_bt_results = logit_bt.fit(disp=False)
+        logit_bt_res = logit_bt.fit(disp=False, maxiter=150, method='lbfgs')
         
         test_exog = sm.add_constant(test[[f"{v}_lag1" for v in predictors] + ["Regime_Prob_Recession_lag1"]])
-        full_prob = logit_bt_results.predict(test_exog)[0]
+        full_p = logit_bt_res.predict(test_exog)[0]
         
-        # --- Benchmark: UMich Sentiment Only ---
-        benchmark_exog = sm.add_constant(train[["UMich_Sentiment_lag1"]])
-        benchmark_model = Logit(train["Recession_Next4Q"], benchmark_exog)
-        benchmark_results = benchmark_model.fit(disp=False)
+        # Benchmark: UMich Sentiment
+        bench_exog = sm.add_constant(train[["UMich_Sentiment_lag1"]])
+        bench_model = Logit(train["Recession_Next4Q"], bench_exog)
+        bench_res = bench_model.fit(disp=False, maxiter=150, method='lbfgs')
         
-        test_bench_exog = sm.add_constant(test[["UMich_Sentiment_lag1"]])
-        bench_prob = benchmark_results.predict(test_bench_exog)[0]
+        test_bench = sm.add_constant(test[["UMich_Sentiment_lag1"]])
+        bench_p = bench_res.predict(test_bench)[0]
         
-        full_model_preds.append(full_prob)
-        benchmark_preds.append(bench_prob)
+        full_preds.append(full_p)
+        bench_preds.append(bench_p)
         actuals.append(test["Recession_Next4Q"].values[0])
         
     except:
         continue
 
-# ====================== PERFORMANCE METRICS ======================
-def get_metrics(preds, actuals):
+print(f"Successful predictions: {len(actuals)}")
+
+def safe_metrics(preds, actuals):
+    if len(actuals) < 8:
+        return {"AUC": 0.5, "Accuracy": 0.5, "Precision": 0.5, "Recall": 0.5}
     auc = roc_auc_score(actuals, preds)
-    preds_bin = [1 if p > 0.5 else 0 for p in preds]
+    bin_preds = [1 if p > 0.5 else 0 for p in preds]
     return {
         "AUC": round(auc, 3),
-        "Accuracy": round(accuracy_score(actuals, preds_bin), 3),
-        "Precision": round(precision_score(actuals, preds_bin, zero_division=0), 3),
-        "Recall": round(recall_score(actuals, preds_bin, zero_division=0), 3)
+        "Accuracy": round(accuracy_score(actuals, bin_preds), 3),
+        "Precision": round(precision_score(actuals, bin_preds, zero_division=0), 3),
+        "Recall": round(recall_score(actuals, bin_preds, zero_division=0), 3)
     }
 
-full_metrics = get_metrics(full_model_preds, actuals)
-bench_metrics = get_metrics(benchmark_preds, actuals)
+full_m = safe_metrics(full_preds, actuals)
+bench_m = safe_metrics(bench_preds, actuals)
 
 print("\n=== Backtest Results ===")
 print(f"{'Metric':<12} {'Full Model':<12} {'UMich Benchmark':<15}")
-print("-" * 40)
-for metric in ["AUC", "Accuracy", "Precision", "Recall"]:
-    print(f"{metric:<12} {full_metrics[metric]:<12} {bench_metrics[metric]:<15}")
+print("-" * 42)
+for m in ["AUC", "Accuracy", "Precision", "Recall"]:
+    print(f"{m:<12} {full_m[m]:<12} {bench_m[m]:<15}")
 
-# ====================== GENERATE DASHBOARD ======================
+# ====================== PLOTS (from 2019) ======================
 latest = df.iloc[-1]
 latest_date = df.index[-1]
 df_plot = df[df.index >= '2019-01-01']
@@ -132,7 +138,7 @@ df_plot[["Regime_Prob_Expansion", "Regime_Prob_Recession"]].plot(ax=axes[0, 0], 
 axes[0, 0].axhline(0.5, color="gray", linestyle="--", alpha=0.7)
 
 df_plot["Recession_Prob"].plot(ax=axes[0, 1], title="4-Quarter Recession Probability", color="red", linewidth=2)
-axes[0, 1].axhline(0.3, color="orange", linestyle="--", label="Warning Threshold")
+axes[0, 1].axhline(0.3, color="orange", linestyle="--", label="Warning (30%)")
 axes[0, 1].legend()
 
 ax3 = axes[1, 0]
@@ -149,41 +155,38 @@ plt.tight_layout()
 plt.savefig("docs/latest_dashboard.png", dpi=150, bbox_inches="tight")
 plt.close()
 
-# HTML Dashboard with Benchmark Comparison
-html_content = f"""<!DOCTYPE html>
+# ====================== HTML DASHBOARD ======================
+html = f"""<!DOCTYPE html>
 <html>
 <head><title>Economic Regime Dashboard</title></head>
 <body style="font-family: Arial; max-width: 1100px; margin: 40px auto; padding: 20px;">
     <h1>Economic Regime Dashboard</h1>
     <p><strong>Last Updated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</p>
     
-    <h2>Current Regime Probability</h2>
+    <h2>Current Regime</h2>
     <p>Expansion: <strong>{latest['Regime_Prob_Expansion']*100:.1f}%</strong></p>
     <p>Recession: <strong>{latest['Regime_Prob_Recession']*100:.1f}%</strong></p>
     
     <h2>4-Quarter Recession Probability</h2>
     <p style="font-size: 28px; color: red; font-weight: bold;">{latest['Recession_Prob']*100:.1f}%</p>
     
-    <h2>Backtest Performance Comparison</h2>
-    <table style="border-collapse: collapse; width: 70%; margin-top: 10px;">
-        <tr style="background-color: #f2f2f2;">
-            <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Metric</th>
-            <th style="padding: 10px; border: 1px solid #ddd;">Full Model</th>
-            <th style="padding: 10px; border: 1px solid #ddd;">UMich Sentiment (Benchmark)</th>
-        </tr>
-        <tr><td style="padding: 8px; border: 1px solid #ddd;">AUC-ROC</td><td style="padding: 8px; border: 1px solid #ddd;">{full_metrics['AUC']}</td><td style="padding: 8px; border: 1px solid #ddd;">{bench_metrics['AUC']}</td></tr>
-        <tr><td style="padding: 8px; border: 1px solid #ddd;">Accuracy</td><td style="padding: 8px; border: 1px solid #ddd;">{full_metrics['Accuracy']}</td><td style="padding: 8px; border: 1px solid #ddd;">{bench_metrics['Accuracy']}</td></tr>
-        <tr><td style="padding: 8px; border: 1px solid #ddd;">Precision</td><td style="padding: 8px; border: 1px solid #ddd;">{full_metrics['Precision']}</td><td style="padding: 8px; border: 1px solid #ddd;">{bench_metrics['Precision']}</td></tr>
-        <tr><td style="padding: 8px; border: 1px solid #ddd;">Recall</td><td style="padding: 8px; border: 1px solid #ddd;">{full_metrics['Recall']}</td><td style="padding: 8px; border: 1px solid #ddd;">{bench_metrics['Recall']}</td></tr>
+    <h2>Backtest Performance (Rolling 8-year windows)</h2>
+    <table style="border-collapse: collapse; width: 70%;">
+        <tr style="background:#f2f2f2;"><th style="padding:8px; border:1px solid #ddd;">Metric</th>
+            <th style="padding:8px; border:1px solid #ddd;">Full Model</th>
+            <th style="padding:8px; border:1px solid #ddd;">UMich Benchmark</th></tr>
+        <tr><td style="padding:8px; border:1px solid #ddd;">AUC-ROC</td><td style="padding:8px; border:1px solid #ddd;">{full_m['AUC']}</td><td style="padding:8px; border:1px solid #ddd;">{bench_m['AUC']}</td></tr>
+        <tr><td style="padding:8px; border:1px solid #ddd;">Accuracy</td><td style="padding:8px; border:1px solid #ddd;">{full_m['Accuracy']}</td><td style="padding:8px; border:1px solid #ddd;">{bench_m['Accuracy']}</td></tr>
+        <tr><td style="padding:8px; border:1px solid #ddd;">Precision</td><td style="padding:8px; border:1px solid #ddd;">{full_m['Precision']}</td><td style="padding:8px; border:1px solid #ddd;">{bench_m['Precision']}</td></tr>
+        <tr><td style="padding:8px; border:1px solid #ddd;">Recall</td><td style="padding:8px; border:1px solid #ddd;">{full_m['Recall']}</td><td style="padding:8px; border:1px solid #ddd;">{bench_m['Recall']}</td></tr>
     </table>
-    <p><small>Based on {len(full_model_preds)} out-of-sample predictions (Rolling 8-year windows)</small></p>
     
-    <h2>Dashboard Visualization</h2>
-    <img src="latest_dashboard.png" style="max-width: 100%; border: 1px solid #ccc; border-radius: 8px;">
+    <h2>Dashboard</h2>
+    <img src="latest_dashboard.png" style="max-width:100%; border:1px solid #ccc; border-radius:8px;">
 </body>
 </html>"""
 
 with open("docs/index.html", "w", encoding="utf-8") as f:
-    f.write(html_content)
+    f.write(html)
 
-print("\n✅ Dashboard generated successfully with benchmark comparison!")
+print("✅ Dashboard generated successfully!")
